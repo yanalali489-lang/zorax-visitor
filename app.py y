@@ -1,0 +1,101 @@
+
+import os
+import hmac
+from datetime import datetime
+from collections import deque
+
+from flask import Flask, request, session, redirect, url_for, render_template_string
+
+app = Flask(__name__)
+app.secret_key = os.environ.get("SECRET_KEY", "local-test-key-change-before-deploy")
+
+# Son 200 kaydı bellekte tutar; sunucu yeniden başlayınca silinir.
+visitors = deque(maxlen=200)
+
+PAGE = """
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZØRAX</title>
+<style>
+body { background:#101014; color:#eee; font-family:Arial,sans-serif;
+       max-width:700px; margin:40px auto; padding:20px; }
+h1 { color:#a78bfa; }
+a { color:#a78bfa; }
+input,button { padding:10px; margin:5px 0; }
+table { width:100%; text-align:left; }
+</style>
+</head>
+<body>
+<h1>ZØRAX</h1>
+<p>Hoş geldin! Güvenlik ve site işleyişi amacıyla bağlantı IP adresi
+ve ziyaret zamanı geçici olarak kaydedilebilir.</p>
+<a href="/admin">Yönetici girişi</a>
+{% if message %}<p>{{ message }}</p>{% endif %}
+{% if logged_in %}
+<h2>Son ziyaretler</h2>
+<table>
+<tr><th>IP</th><th>Zaman</th></tr>
+{% for v in records %}
+<tr><td>{{ v.ip }}</td><td>{{ v.time }}</td></tr>
+{% endfor %}
+</table>
+<a href="/logout">Çıkış yap</a>
+{% elif show_login %}
+<form method="post">
+<label>Yönetici şifresi</label><br>
+<input type="password" name="password" required>
+<button type="submit">Giriş yap</button>
+</form>
+{% endif %}
+</body>
+</html>
+"""
+
+@app.route("/")
+def home():
+    visitors.append({
+        "ip": request.remote_addr or "bilinmiyor",
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+    return render_template_string(
+        PAGE, message="", logged_in=False, show_login=False, records=[]
+    )
+
+@app.route("/admin", methods=["GET", "POST"])
+def admin():
+    password = os.environ.get("ADMIN_PASSWORD")
+
+    if not password:
+        return "Yönetici girişi henüz yapılandırılmadı.", 503
+
+    if request.method == "POST":
+        entered = request.form.get("password", "")
+        if hmac.compare_digest(entered, password):
+            session["admin"] = True
+            return redirect(url_for("admin"))
+        return render_template_string(
+            PAGE, message="Şifre yanlış.", logged_in=False,
+            show_login=True, records=[]
+        )
+
+    if session.get("admin"):
+        return render_template_string(
+            PAGE, message="", logged_in=True,
+            show_login=False, records=list(reversed(visitors))
+        )
+
+    return render_template_string(
+        PAGE, message="", logged_in=False,
+        show_login=True, records=[]
+    )
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("home"))
+
+if __name__ == "__main__":
+    app.run(host="127.0.0.1", port=5000)
